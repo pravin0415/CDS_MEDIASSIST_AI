@@ -25,7 +25,7 @@ function ProtectedRoute({ children, requiredRole }) {
           .from("profiles")
           .select("role")
           .eq("id", user.id)
-          .single();
+          .maybeSingle();
 
         if (error) {
           console.error("Profile error:", error);
@@ -57,7 +57,7 @@ function ProtectedRoute({ children, requiredRole }) {
   }
 
   if (!allowed) {
-    return <Navigate to="/" replace />;
+    return <Navigate to="/login" replace />;
   }
 
   return children;

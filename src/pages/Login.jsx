@@ -1,8 +1,21 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { useLanguage } from "../i18n";
+
+const REQUEST_TIMEOUT_MS = 20_000;
+
+function withTimeout(request, message) {
+  return Promise.race([
+    request,
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(message)), REQUEST_TIMEOUT_MS);
+    }),
+  ]);
+}
 
 function Login() {
+  const { t } = useLanguage();
   const navigate = useNavigate();
 
   const [email, setEmail] = useState("");
@@ -17,38 +30,48 @@ function Login() {
     setError("");
     setLoading(true);
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    try {
+      const { data, error } = await withTimeout(
+        supabase.auth.signInWithPassword({ email, password }),
+        "Login timed out. Check your internet connection and Supabase project URL.",
+      );
 
-    if (error) {
-      setError(error.message);
+      if (error) {
+        setError(error.message);
+        return;
+      }
+
+      const user = data.user;
+      if (!user) {
+        setError("Login succeeded, but no user account was returned.");
+        return;
+      }
+
+      const { data: profile, error: profileError } = await withTimeout(
+        supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", user.id)
+          .maybeSingle(),
+        "Profile lookup timed out. Check Supabase database connectivity.",
+      );
+
+      if (profileError) {
+        setError(profileError.message);
+        return;
+      }
+
+      if (profile && profile.role === "doctor") {
+        navigate("/doctor");
+      } else {
+        navigate("/patient");
+      }
+    } catch (loginError) {
+      console.error("Login failed:", loginError);
+      setError(loginError.message || "Unable to log in. Please try again.");
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const user = data.user;
-
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("role")
-      .eq("id", user.id)
-      .single();
-
-    if (profileError) {
-      setError(profileError.message);
-      setLoading(false);
-      return;
-    }
-
-    if (profile.role === "doctor") {
-      navigate("/doctor");
-    } else {
-      navigate("/patient");
-    }
-
-    setLoading(false);
   };
 
   return (
@@ -66,17 +89,19 @@ function Login() {
         </div>
 
         <div className="auth-copy">
-          <span>CLINICIAN AND PATIENT ACCESS</span>
-          <h1>Sign in to your clinical workspace.</h1>
+          <span>PATIENT AND DOCTOR ACCESS</span>
+          <h1>Sign in to your care workspace.</h1>
           <p>
-            Review submissions, manage care information, and
-            continue AI-assisted clinical workflows securely.
+            Patients review AI screening results first. During an in-person visit, a doctor
+            can request access using the Patient ID; the patient approves access in their portal.
           </p>
         </div>
 
       </section>
 
       <div className="auth-card">
+
+        <Link to="/" className="auth-home-link">← Back to home</Link>
 
         <div className="auth-card-heading">
           <span>WELCOME BACK</span>
@@ -93,7 +118,7 @@ function Login() {
 
           <input
             type="email"
-            placeholder="Email"
+            placeholder={t("email")}
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
@@ -101,14 +126,14 @@ function Login() {
 
           <input
             type="password"
-            placeholder="Password"
+            placeholder={t("password")}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
           />
 
           <button type="submit" disabled={loading}>
-            {loading ? "Logging in..." : "Login"}
+            {loading ? "..." : t("login")}
           </button>
 
         </form>
@@ -121,7 +146,7 @@ function Login() {
           <p>
             Don't have an account?{" "}
             <Link to="/register">
-              Register
+              {t("register")}
             </Link>
           </p>
         </div>

@@ -4,3 +4,8 @@ requests
 tensorflow
 opencv-python
 numpy
+pillow
+scikit-learn
+xgboost
+shap
+openai-whisper

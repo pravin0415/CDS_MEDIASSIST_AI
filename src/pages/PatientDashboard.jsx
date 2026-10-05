@@ -3,6 +3,12 @@ import { supabase } from "../lib/supabase";
 import { loadPatientReports } from "../lib/aiReports";
 import { useNavigate } from "react-router-dom";
 import "../patient-dashboard.css";
+import SeverityBadge from "../components/SeverityBadge";
+import ShapViewer from "../components/ShapViewer";
+import GradCamViewer from "../components/GradCamViewer";
+import NearbyFacilities from "../components/NearbyFacilities";
+import { useLanguage } from "../i18n";
+import { extractLocalizedSymptoms } from "../lib/symptomLanguage";
 
 function Icon({ name, size = 20 }) {
   const paths = {
@@ -110,12 +116,15 @@ function Icon({ name, size = 20 }) {
 }
 
 function PatientDashboard() {
+  const { language, t } = useLanguage();
   const navigate = useNavigate();
 
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [activeSection, setActiveSection] = useState("overview");
   const [symptoms, setSymptoms] = useState("");
+  const [analysisResult, setAnalysisResult] = useState(null);
+  const [listening, setListening] = useState(false);
   const [profileName, setProfileName] = useState("");
 
   const [skinFile, setSkinFile] = useState(null);
@@ -123,6 +132,9 @@ function PatientDashboard() {
 
   const [submissions, setSubmissions] = useState([]);
   const [reports, setReports] = useState([]);
+  const [consultationRequests, setConsultationRequests] = useState([]);
+  const [doctorNotes, setDoctorNotes] = useState([]);
+  const [emergencyFlags, setEmergencyFlags] = useState([]);
 
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -157,7 +169,7 @@ function PatientDashboard() {
           .from("profiles")
           .select("full_name, user_code, role")
           .eq("id", user.id)
-          .single();
+          .maybeSingle();
 
       if (profileError) {
         console.error(profileError);
@@ -165,16 +177,16 @@ function PatientDashboard() {
         return;
       }
 
-      if (profileData.role !== "patient") {
+      if (!profileData || profileData.role !== "patient") {
         navigate("/");
         return;
       }
 
       setProfile(profileData);
       setProfileName(profileData.full_name || "");
-
       await loadSubmissions(user.id);
       await loadReports(user.id);
+      await loadDoctorUpdates(user.id);
     } catch (err) {
       console.error(err);
       setError("Something went wrong.");
@@ -204,6 +216,45 @@ function PatientDashboard() {
     }
 
     setSubmissions(data || []);
+  };
+
+  const loadDoctorUpdates = async (patientId) => {
+    const [{ data: requests, error: requestError }, { data: notes, error: notesError }] = await Promise.all([
+      supabase.rpc("list_patient_consultations"),
+      supabase.from("clinician_followups")
+        .select("id, note_type, consultation_mode, follow_up_plan, created_at")
+        .eq("patient_id", patientId)
+        .order("created_at", { ascending: false }),
+    ]);
+    if (requestError || notesError) {
+      setError(requestError?.message || notesError?.message || "Doctor updates could not be loaded.");
+      return;
+    }
+    setConsultationRequests(requests || []);
+    setDoctorNotes(notes || []);
+  };
+
+  useEffect(() => {
+    if (!user?.id) return undefined;
+    const refresh = () => loadDoctorUpdates(user.id);
+    window.addEventListener("focus", refresh);
+    const timer = window.setInterval(refresh, 30000);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      window.clearInterval(timer);
+    };
+  }, [user?.id]);
+
+  const updateDoctorAccess = async (requestId, nextStatus) => {
+    const { error: statusError } = await supabase.rpc("set_consultation_status", {
+      request_id: requestId,
+      next_status: nextStatus,
+    });
+    if (statusError) return setError(statusError.message);
+    setMessage(nextStatus === "accepted"
+      ? "Doctor access approved. You may now give that doctor your Patient ID during your visit."
+      : "Doctor access declined or revoked.");
+    await loadDoctorUpdates(user.id);
   };
 
   const clearMessages = () => {
@@ -250,25 +301,47 @@ function PatientDashboard() {
     clearMessages();
 
     if (!symptoms.trim()) {
-      setError("Please describe your symptoms before submitting.");
+      setError("Please type or speak your symptoms before submitting.");
       return;
     }
 
+    const symptomDescription = symptoms.trim();
+    const selectedSymptoms = extractLocalizedSymptoms(symptomDescription, language);
+
     try {
       setUploading(true);
+      setAnalysisResult(null);
 
-      const { error } = await supabase
+      const response = await fetch("http://localhost:8000/api/ai/predict", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          submission_type: "symptoms",
+          description: symptomDescription,
+          selected_symptoms: selectedSymptoms,
+        }),
+      });
+      const analysis = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(analysis?.error || "The symptom analysis service could not process this text.");
+      }
+
+      const { data: submission, error } = await supabase
         .from("medical_submissions")
         .insert({
           patient_id: user.id,
           submission_type: "symptoms",
-          description: symptoms.trim(),
-        });
+          description: symptomDescription,
+          selected_symptoms: selectedSymptoms,
+          ai_result: analysis,
+        })
+        .select("id");
 
       if (error) throw error;
 
       setSymptoms("");
-      setMessage("Your symptoms have been securely submitted.");
+      setAnalysisResult({ ...analysis, submission_id: submission?.[0]?.id });
+      setMessage("Your symptoms were analysed and the screening result is ready.");
 
       await loadSubmissions(user.id);
     } catch (err) {
@@ -306,6 +379,22 @@ function PatientDashboard() {
 
     try {
       setUploading(true);
+      setAnalysisResult(null);
+
+      // Analyse the selected study immediately. The patient—not a doctor—
+      // receives the model output, decision-support tier, and Grad-CAM.
+      const formData = new FormData();
+      formData.append("file", file);
+      const analysisResponse = await fetch(
+        type === "skin_image"
+          ? "http://localhost:8000/api/predict/skin"
+          : "http://localhost:8000/api/predict/chest-xray",
+        { method: "POST", body: formData },
+      );
+      const analysis = await analysisResponse.json().catch(() => null);
+      if (!analysisResponse.ok) {
+        throw new Error(analysis?.error || "The image analysis service could not process this image.");
+      }
 
       const folder =
         type === "skin_image" ? "skin" : "chest-xray";
@@ -322,14 +411,16 @@ function PatientDashboard() {
 
       if (uploadError) throw uploadError;
 
-      const { error: databaseError } = await supabase
+      const { data: submission, error: databaseError } = await supabase
         .from("medical_submissions")
         .insert({
           patient_id: user.id,
           submission_type: type,
           file_path: filePath,
           file_name: file.name,
-        });
+          ai_result: analysis,
+        })
+        .select("id");
 
       if (databaseError) throw databaseError;
 
@@ -339,10 +430,17 @@ function PatientDashboard() {
         setXrayFile(null);
       }
 
+      setAnalysisResult({
+        ...analysis,
+        submission_type: type,
+        submission_id: submission?.[0]?.id,
+        source_image_url: URL.createObjectURL(file),
+      });
+
       setMessage(
         type === "skin_image"
-          ? "Skin image uploaded securely."
-          : "Chest X-ray uploaded securely."
+          ? "Skin image analysed and uploaded securely."
+          : "Chest X-ray analysed and uploaded securely."
       );
 
       await loadSubmissions(user.id);
@@ -360,7 +458,7 @@ function PatientDashboard() {
   };
 
   const formatDate = (date) => {
-    return new Date(date).toLocaleString([], {
+    return new Date(date).toLocaleString(language === "hi" ? "hi-IN" : language === "mr" ? "mr-IN" : "en-IN", {
       month: "short",
       day: "numeric",
       hour: "2-digit",
@@ -369,15 +467,54 @@ function PatientDashboard() {
   };
 
   const getSubmissionName = (type) => {
-    if (type === "symptoms") return "Symptom report";
-    if (type === "skin_image") return "Skin image";
-    return "Chest X-ray";
+    if (type === "symptoms") return t("symptoms");
+    if (type === "skin_image") return t("skinImage");
+    return t("chestXray");
   };
 
   const getSubmissionIcon = (type) => {
     if (type === "symptoms") return "activity";
     if (type === "skin_image") return "image";
     return "lungs";
+  };
+
+  const copyPatientId = async () => {
+    const patientId = profile?.user_code || user?.id;
+    if (!patientId || !navigator.clipboard) {
+      setError("Patient ID could not be copied. Please copy it manually.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(patientId);
+      setMessage("Patient ID copied.");
+    } catch (copyError) {
+      console.error(copyError);
+      setError("Patient ID could not be copied. Please copy it manually.");
+    }
+  };
+
+  const startSpeechInput = () => {
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) {
+      setError("Speech input is not supported by this browser. Please type your symptoms.");
+      return;
+    }
+
+    const recognition = new Recognition();
+    recognition.lang = language === "hi" ? "hi-IN" : language === "mr" ? "mr-IN" : "en-IN";
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognition.onstart = () => setListening(true);
+    recognition.onend = () => setListening(false);
+    recognition.onerror = () => {
+      setListening(false);
+      setError("Speech input could not start. Check microphone permission and try again.");
+    };
+    recognition.onresult = (event) => {
+      const spokenText = event.results[0][0].transcript;
+      setSymptoms((current) => [current, spokenText].filter(Boolean).join(" "));
+    };
+    recognition.start();
   };
 
   if (loading) {
@@ -433,7 +570,7 @@ function PatientDashboard() {
               onClick={() => setActiveSection("overview")}
             >
               <Icon name="grid" />
-              <span>Overview</span>
+              <span>{t("overview")}</span>
             </button>
 
             <button
@@ -447,7 +584,7 @@ function PatientDashboard() {
               }
             >
               <Icon name="upload" />
-              <span>Submissions</span>
+              <span>{t("submissions")}</span>
             </button>
 
             <button
@@ -459,7 +596,7 @@ function PatientDashboard() {
               onClick={() => setActiveSection("reports")}
             >
               <Icon name="report" />
-              <span>AI Reports</span>
+              <span>{t("reports")}</span>
             </button>
 
             <button
@@ -471,7 +608,7 @@ function PatientDashboard() {
               onClick={() => setActiveSection("profile")}
             >
               <Icon name="user" />
-              <span>Profile</span>
+              <span>{t("profile")}</span>
             </button>
 
           </nav>
@@ -486,7 +623,7 @@ function PatientDashboard() {
             </div>
 
             <div>
-              <strong>Secure portal</strong>
+              <strong>{t("securePortal")}</strong>
               <span>Your data is protected</span>
             </div>
           </div>
@@ -496,7 +633,7 @@ function PatientDashboard() {
             onClick={logout}
           >
             <Icon name="logout" size={18} />
-            Sign out
+            {t("logout")}
           </button>
 
           <div className="sidebar-version">
@@ -517,22 +654,17 @@ function PatientDashboard() {
         <header className="topbar">
 
           <div className="breadcrumb">
-            Patient Portal
+            {t("patientPortal")}
             <span>/</span>
             <strong>
-              {activeSection === "overview" && "Overview"}
-              {activeSection === "submissions" && "Submissions"}
-              {activeSection === "reports" && "AI Reports"}
-              {activeSection === "profile" && "Profile"}
+              {activeSection === "overview" && t("overview")}
+              {activeSection === "submissions" && t("submissions")}
+              {activeSection === "reports" && t("reports")}
+              {activeSection === "profile" && t("profile")}
             </strong>
           </div>
 
           <div className="topbar-actions">
-
-            <button className="notification-button">
-              <Icon name="bell" size={19} />
-              <span />
-            </button>
 
             <div className="user-menu">
 
@@ -542,7 +674,7 @@ function PatientDashboard() {
 
               <div className="user-menu-text">
                 <strong>{profile?.full_name}</strong>
-                <span>Patient</span>
+                <span>{t("patient")}</span>
               </div>
 
             </div>
@@ -571,8 +703,8 @@ function PatientDashboard() {
             </h1>
 
             <p>
-              Keep your health information organized and
-              securely share it with your care team.
+              Keep your screening submissions and results in one place.
+              This portal does not share them with a doctor.
             </p>
 
           </div>
@@ -616,7 +748,7 @@ function PatientDashboard() {
 
               <div className="verified">
                 <Icon name="shield" size={13} />
-                Identity verified
+                Signed-in patient
               </div>
             </div>
 
@@ -633,11 +765,8 @@ function PatientDashboard() {
               </strong>
 
               <button
-                onClick={() =>
-                  navigator.clipboard?.writeText(
-                    profile?.user_code || user?.id
-                  )
-                }
+                type="button"
+                onClick={copyPatientId}
                 title="Copy patient ID"
               >
                 <Icon name="copy" size={15} />
@@ -701,8 +830,8 @@ function PatientDashboard() {
               </h2>
 
               <p>
-                Submit information that can help your
-                healthcare team understand your condition.
+                Submit information for AI screening and review
+                your own results here.
               </p>
             </div>
 
@@ -739,7 +868,7 @@ function PatientDashboard() {
                 </span>
 
                 <h3>
-                  Symptoms
+                  {t("symptoms")}
                 </h3>
 
                 <p>
@@ -747,13 +876,40 @@ function PatientDashboard() {
                   any symptoms or health concerns.
                 </p>
 
+                <fieldset className="red-flag-checklist">
+                  <legend>{t("redFlagTitle")}</legend>
+                  {[
+                    ["breathing", t("redFlagBreathing")],
+                    ["chest", t("redFlagChest")],
+                    ["stroke", t("redFlagStroke")],
+                    ["bleeding", t("redFlagBleeding")],
+                  ].map(([key, label]) => (
+                    <label key={key}>
+                      <input type="checkbox" checked={emergencyFlags.includes(key)}
+                        onChange={(event) => setEmergencyFlags((current) => event.target.checked
+                          ? [...current, key] : current.filter((flag) => flag !== key))} />
+                      {label}
+                    </label>
+                  ))}
+                </fieldset>
+                {emergencyFlags.length > 0 && <div className="emergency-alert" role="alert">{t("redFlagAction")}</div>}
+
                 <textarea
                   value={symptoms}
                   onChange={(e) =>
                     setSymptoms(e.target.value)
                   }
-                  placeholder="Describe your symptoms..."
+                  placeholder="Type your symptoms, for example: I have cough, fever, chills and feel tired..."
                 />
+
+                <button
+                  className="speech-input-button"
+                  type="button"
+                  onClick={startSpeechInput}
+                  disabled={listening}
+                >
+                  {listening ? t("listening") : t("useMicrophone")}
+                </button>
 
               </div>
 
@@ -764,7 +920,7 @@ function PatientDashboard() {
               >
                 {uploading
                   ? "Submitting..."
-                  : "Submit symptoms"}
+                    : t("submitSymptoms")}
                 <span>→</span>
               </button>
 
@@ -794,7 +950,7 @@ function PatientDashboard() {
                 </span>
 
                 <h3>
-                  Skin image
+                  {t("skinImage")}
                 </h3>
 
                 <p>
@@ -844,7 +1000,7 @@ function PatientDashboard() {
               >
                 {uploading
                   ? "Uploading..."
-                  : "Upload skin image"}
+                    : t("uploadSkin")}
                 <span>→</span>
               </button>
 
@@ -874,7 +1030,7 @@ function PatientDashboard() {
                 </span>
 
                 <h3>
-                  Chest X-ray
+                  {t("chestXray")}
                 </h3>
 
                 <p>
@@ -924,7 +1080,7 @@ function PatientDashboard() {
               >
                 {uploading
                   ? "Uploading..."
-                  : "Upload chest X-ray"}
+                    : t("uploadXray")}
                 <span>→</span>
               </button>
 
@@ -932,8 +1088,99 @@ function PatientDashboard() {
 
           </div>
 
+          {analysisResult && (
+            <section className="patient-screening-result">
+              {analysisResult.decision_tier === "CRITICAL" && (
+                <div className="emergency-alert" role="alert">{t("redFlagAction")}</div>
+              )}
+              <SeverityBadge
+                decisionSupport={analysisResult.decision_support}
+                decisionTier={analysisResult.decision_tier}
+                disclaimer={analysisResult.disclaimer}
+              />
+              <span>{t("aiResult")}</span>
+              <h3>{analysisResult.prediction}</h3>
+              <p>{t("confidence")}: {(Number(analysisResult.confidence) * 100).toFixed(1)}%. {t("scoreDisclaimer")}</p>
+
+              {analysisResult.matched_symptoms && (
+                <p><strong>Recognized from your text:</strong> {analysisResult.matched_symptoms.join(", ") || "No model symptoms recognized"}</p>
+              )}
+              {analysisResult.xai && analysisResult.xai.method === "SHAP" && (
+                <ShapViewer xaiData={analysisResult.xai} predictedDisease={analysisResult.prediction} />
+              )}
+
+              {analysisResult.heatmap_url && (
+                <GradCamViewer
+                  originalUrl={analysisResult.source_image_url}
+                  heatmapUrl={analysisResult.heatmap_url}
+                  targetClass={analysisResult.prediction}
+                  xaiNote={analysisResult.xai?.gradcam_note}
+                />
+              )}
+
+              <h4>{analysisResult.self_care?.title}</h4>
+              {analysisResult.self_care?.steps?.length > 0 && <ul>{analysisResult.self_care.steps.map((step) => <li key={step}>{step}</li>)}</ul>}
+              {analysisResult.self_care?.warning && <p className={analysisResult.self_care.level === "urgent" ? "urgent-warning" : "screening-warning"}>{analysisResult.self_care.warning}</p>}
+
+              {["CRITICAL", "HIGH_URGENCY", "MODERATE", "UNCERTAIN"].includes(analysisResult.decision_tier) && (
+                <>
+                  <p className="urgent-warning">
+                    {analysisResult.decision_tier === "CRITICAL"
+                      ? "Seek emergency medical care now; do not wait for an online request."
+                      : "Consider an in-person assessment. Find nearby care, and show your Patient ID to the doctor you visit. The doctor can request access, which you approve here."}
+                  </p>
+                  <NearbyFacilities key={analysisResult.submission_id || analysisResult.decision_tier}
+                    initialKind={["CRITICAL", "HIGH_URGENCY"].includes(analysisResult.decision_tier) ? "hospital" : "doctor"} />
+                </>
+              )}
+            </section>
+          )}
+
         </section>
 
+        )}
+
+        {(activeSection === "overview" || activeSection === "submissions") && (
+          <section className="patient-followup-list">
+            <div className="followup-heading">
+              <div>
+                <div className="section-kicker">DOCTOR CONNECTIONS</div>
+                <h2>Access requests and visit notes</h2>
+              </div>
+              <button type="button" onClick={() => loadDoctorUpdates(user?.id)}>Refresh</button>
+            </div>
+            <p>
+              Your Patient ID identifies your record but does not grant access. After a visit,
+              approve only the doctor account you recognize. Doctor accounts are not licence-verified in this prototype.
+            </p>
+            {consultationRequests.length === 0 && <p>No doctor access requests yet.</p>}
+            {consultationRequests.map((request) => (
+              <article className="patient-report-card" key={request.id}>
+                <h3>{request.doctor_name || "Doctor account"}</h3>
+                <p>Screening tier: {request.decision_tier.replace("_", " ")}</p>
+                <p>Status: {request.status}</p>
+                <time>{formatDate(request.created_at)}</time>
+                {request.status === "requested" && (
+                  <div>
+                    <button type="button" onClick={() => updateDoctorAccess(request.id, "accepted")}>Approve this doctor</button>
+                    <button type="button" onClick={() => updateDoctorAccess(request.id, "cancelled")}>Decline</button>
+                  </div>
+                )}
+                {request.status === "accepted" && (
+                  <button type="button" onClick={() => updateDoctorAccess(request.id, "cancelled")}>Revoke access</button>
+                )}
+              </article>
+            ))}
+            <h3>Notes from your doctor</h3>
+            {doctorNotes.length === 0 && <p>No visit notes have been added yet.</p>}
+            {doctorNotes.map((note) => (
+              <article className="patient-report-card" key={note.id}>
+                <h3>{note.note_type.replace("_", " ")}</h3>
+                <p>{note.follow_up_plan}</p>
+                <small>{note.consultation_mode.replace("_", " ")} · {formatDate(note.created_at)}</small>
+              </article>
+            ))}
+          </section>
         )}
 
 
@@ -977,8 +1224,8 @@ function PatientDashboard() {
                 </h3>
 
                 <p>
-                  Doctor-reviewed AI reports will appear
-                  here after they are saved.
+                  Historical saved AI reports, if any, will
+                  appear here.
                 </p>
               </div>
 
@@ -1011,7 +1258,7 @@ function PatientDashboard() {
                           Number(report.confidence) *
                           100
                         ).toFixed(1)}
-                        % confidence
+                        % model score (not a disease probability)
                       </strong>
                     )}
                   </div>
@@ -1057,14 +1304,14 @@ function PatientDashboard() {
                 </h2>
 
                 <p>
-                  Keep your patient identity accurate for
-                  clinical review and saved report access.
+                  Keep your account details accurate for
+                  your own screening records.
                 </p>
               </div>
 
               <div className="secure-label">
                 <Icon name="shield" size={14} />
-                Verified
+                Signed in
               </div>
 
             </div>

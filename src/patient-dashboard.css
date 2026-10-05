@@ -360,42 +360,6 @@ textarea {
   gap: 21px;
 }
 
-.notification-button {
-  width: 34px;
-  height: 34px;
-
-  border: 1px solid var(--border);
-
-  background: white;
-
-  color: #647084;
-
-  border-radius: 9px;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  position: relative;
-
-  cursor: pointer;
-}
-
-.notification-button span {
-  width: 5px;
-  height: 5px;
-
-  background: #ef5b5b;
-
-  border-radius: 50%;
-
-  position: absolute;
-
-  top: 7px;
-  right: 7px;
-
-  border: 1px solid white;
-}
 
 .user-menu {
   display: flex;
@@ -1050,6 +1014,137 @@ textarea {
     0 0 0 3px rgba(23, 105, 255, 0.08);
 }
 
+.speech-input-button {
+  width: 100%;
+  margin-top: 9px;
+  padding: 9px 11px;
+  border: 1px solid #c7d8f4;
+  border-radius: 8px;
+  background: #edf4ff;
+  color: #1769ff;
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.speech-input-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.patient-screening-result {
+  margin-top: 20px;
+  padding: 22px;
+  border: 1px solid #cfe0fd;
+  border-radius: 12px;
+  background: #f7faff;
+  color: #26364d;
+}
+
+.patient-screening-result > span {
+  color: #1769ff;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.patient-screening-result h3 {
+  margin: 7px 0;
+  color: #10213c;
+  font-size: 22px;
+}
+
+.patient-screening-result h4 {
+  margin: 16px 0 7px;
+  color: #10213c;
+  font-size: 13px;
+}
+
+.patient-screening-result p,
+.patient-screening-result li,
+.patient-screening-result small {
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.patient-screening-result ul {
+  margin: 7px 0;
+  padding-left: 19px;
+}
+
+.screening-warning,
+.urgent-warning {
+  padding: 10px;
+  border-radius: 7px;
+  background: #fff4e8;
+  color: #8a4b00;
+}
+
+.urgent-warning {
+  background: #fff0f0;
+  color: #b42318;
+  font-weight: 700;
+}
+
+.model-symptom-picker {
+  margin-top: 12px;
+  padding: 11px;
+  border: 1px solid #e1e6ed;
+  border-radius: 9px;
+  background: #f8faff;
+}
+
+.model-symptom-picker label {
+  display: block;
+  color: #27364e;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.model-symptom-picker small {
+  display: block;
+  margin-top: 4px;
+  color: #728097;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.model-symptom-picker input {
+  width: 100%;
+  margin-top: 9px;
+  padding: 8px 9px;
+  border: 1px solid #d9e1ec;
+  border-radius: 7px;
+  background: #ffffff;
+  font-size: 10px;
+  outline: none;
+}
+
+.selected-symptom-list,
+.model-symptom-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.selected-symptom-list button,
+.model-symptom-options button {
+  border: 1px solid #d2ddec;
+  border-radius: 999px;
+  padding: 5px 8px;
+  background: #ffffff;
+  color: #365171;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.selected-symptom-list button {
+  border-color: #b8d0ff;
+  background: #eaf2ff;
+  color: #1769ff;
+}
+
 
 /* =====================================================
    UPLOAD
@@ -1643,6 +1738,30 @@ textarea {
   gap: 14px;
 }
 
+.patient-followup-list {
+  display: grid;
+  gap: 14px;
+  margin-top: 28px;
+}
+
+.followup-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.patient-followup-list button {
+  margin: 4px 8px 4px 0;
+  padding: 8px 12px;
+  border: 1px solid #94a3b8;
+  border-radius: 6px;
+  background: #fff;
+  color: #1e40af;
+  cursor: pointer;
+}
+
+
 .patient-report-card {
   display: grid;
   gap: 12px;
@@ -1739,4 +1858,22 @@ textarea {
 .profile-save {
   grid-column: 1 / -1;
   max-width: 220px;
+}
+.red-flag-checklist {
+  border: 1px solid #f59e0b;
+  border-radius: 10px;
+  padding: 12px;
+  margin: 12px 0;
+}
+.red-flag-checklist legend { font-weight: 700; padding: 0 4px; }
+.red-flag-checklist label { display: flex; gap: 8px; align-items: flex-start; margin: 7px 0; }
+.red-flag-checklist input { margin-top: 3px; flex: none; }
+.emergency-alert {
+  background: #fff1f2;
+  border: 2px solid #be123c;
+  border-radius: 10px;
+  color: #881337;
+  font-weight: 700;
+  padding: 14px;
+  margin: 12px 0;
 }

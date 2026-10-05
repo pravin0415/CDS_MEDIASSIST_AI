@@ -6,6 +6,10 @@ import {
 } from "../lib/aiReports";
 import { useNavigate } from "react-router-dom";
 import "../doctor-dashboard.css";
+import SeverityBadge from "../components/SeverityBadge";
+import ShapViewer from "../components/ShapViewer";
+import GradCamViewer from "../components/GradCamViewer";
+import { useLanguage } from "../i18n";
 
 function Icon({ name, size = 20 }) {
   const icons = {
@@ -112,6 +116,7 @@ function Icon({ name, size = 20 }) {
 }
 
 function DoctorDashboard() {
+  const { t } = useLanguage();
   const navigate = useNavigate();
 
   const [patientCode, setPatientCode] = useState("");
@@ -121,6 +126,10 @@ function DoctorDashboard() {
   const [patient, setPatient] = useState(null);
   const [submissions, setSubmissions] = useState([]);
   const [savedReports, setSavedReports] = useState([]);
+  const [consultationRequest, setConsultationRequest] = useState(null);
+  const [followUpPlan, setFollowUpPlan] = useState("");
+  const [consultationMode, setConsultationMode] = useState("in_person");
+  const [noteType, setNoteType] = useState("follow_up");
 
   const [selectedSubmission, setSelectedSubmission] =
     useState(null);
@@ -131,6 +140,7 @@ function DoctorDashboard() {
   const [searching, setSearching] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [savingReport, setSavingReport] = useState(false);
+  const [savingFollowUp, setSavingFollowUp] = useState(false);
 
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -154,7 +164,7 @@ function DoctorDashboard() {
       .from("profiles")
       .select("id, full_name, user_code, role")
       .eq("id", user.id)
-      .single();
+      .maybeSingle();
 
     if (!profile || profile.role !== "doctor") {
       navigate("/");
@@ -166,12 +176,33 @@ function DoctorDashboard() {
     return profile;
   };
 
+  const updateConsultationStatus = async (nextStatus) => {
+    if (!consultationRequest) return;
+    const { error: statusError } = await supabase.rpc("set_consultation_status", {
+      request_id: consultationRequest.id,
+      next_status: nextStatus,
+    });
+    if (statusError) return setError(statusError.message);
+    setConsultationRequest((current) => ({ ...current, status: nextStatus }));
+    if (nextStatus === "completed") {
+      setPatient(null);
+      setSubmissions([]);
+      setSavedReports([]);
+      setConsultationRequest(null);
+      setSelectedSubmission(null);
+      setAiResult(null);
+    }
+    setMessage(`Consultation marked ${nextStatus}.`);
+  };
+
   const searchPatient = async () => {
     setError("");
     setMessage("");
     setPatient(null);
     setSubmissions([]);
     setSavedReports([]);
+    setConsultationRequest(null);
+    setFollowUpPlan("");
     setSelectedSubmission(null);
     setAiResult(null);
     setActiveReportId(null);
@@ -205,9 +236,15 @@ function DoctorDashboard() {
       }
 
       if (!data || data.length === 0) {
-        setError(
-          "No patient was found with this Patient ID."
-        );
+        const { error: requestError } = await supabase.rpc("request_patient_connection", {
+          search_patient_code: code,
+        });
+        if (requestError?.message?.includes("already pending or active")) {
+          setMessage("A request is already pending. Ask the patient to approve it, then search this Patient ID again.");
+          return;
+        }
+        if (requestError) throw requestError;
+        setMessage("Access request sent. Ask the patient to approve it in their portal, then search this Patient ID again.");
         return;
       }
 
@@ -230,6 +267,16 @@ function DoctorDashboard() {
       }
 
       setSubmissions(patientSubmissions || []);
+      const { data: requests, error: requestError } = await supabase
+        .from("consultation_requests")
+        .select("id, decision_tier, status, created_at")
+        .eq("patient_id", foundPatient.id)
+        .eq("doctor_id", currentDoctor.id)
+        .eq("status", "accepted")
+        .order("created_at", { ascending: false })
+        .limit(1);
+      if (requestError) throw requestError;
+      setConsultationRequest(requests?.[0] || null);
       setSavedReports(
         await loadPatientReports(foundPatient.id)
       );
@@ -242,6 +289,39 @@ function DoctorDashboard() {
       setError(err.message);
     } finally {
       setSearching(false);
+    }
+  };
+
+  const saveClinicalFollowUp = async () => {
+    if (!consultationRequest || !patient || !doctor || !followUpPlan.trim()) {
+      setError("Enter a clinician follow-up plan before saving.");
+      return;
+    }
+    if (consultationRequest.status !== "accepted") {
+      setError("Accept this patient's consultation before saving a clinician follow-up.");
+      return;
+    }
+
+    try {
+      setSavingFollowUp(true);
+      const { error: followUpError } = await supabase
+        .from("clinician_followups")
+        .insert({
+          consultation_request_id: consultationRequest.id,
+          patient_id: patient.id,
+          doctor_id: doctor.id,
+          consultation_mode: consultationMode,
+          note_type: noteType,
+          follow_up_plan: followUpPlan.trim(),
+        });
+      if (followUpError) throw followUpError;
+      setFollowUpPlan("");
+      setMessage("Clinician follow-up plan saved for the patient.");
+    } catch (err) {
+      console.error(err);
+      setError(err.message || "Unable to save clinician follow-up plan.");
+    } finally {
+      setSavingFollowUp(false);
     }
   };
 
@@ -279,6 +359,10 @@ function DoctorDashboard() {
       setGenerating(true);
 
       let imageUrl = null;
+      const selectedSymptoms = selectedSubmission.description
+        ?.match(/^\[Model symptoms: (.*)\]$/m)?.[1]
+        ?.split(" | ")
+        .filter(Boolean);
 
       if (selectedSubmission.file_path) {
         const { data: signedUrlData, error: signedUrlError } =
@@ -286,7 +370,7 @@ function DoctorDashboard() {
             .from("medical-files")
             .createSignedUrl(
               selectedSubmission.file_path,
-              60 * 10
+              60
             );
 
         if (signedUrlError) {
@@ -325,19 +409,23 @@ function DoctorDashboard() {
             image_url: imageUrl,
             description:
               selectedSubmission.description,
+            selected_symptoms: selectedSymptoms,
           }),
         }
       );
 
       if (!response.ok) {
+        const failure = await response.json().catch(() => null);
         throw new Error(
-          "AI server could not process the submission."
+          failure?.error || "AI server could not process the submission."
         );
       }
 
       const result = await response.json();
 
-      setAiResult(result);
+      // This URL is short-lived and only supports comparing the source study
+      // with Grad-CAM during the active clinician review session.
+      setAiResult({ ...result, source_image_url: imageUrl });
       setActiveReportId(null);
 
       setMessage(
@@ -450,7 +538,7 @@ function DoctorDashboard() {
               onClick={() => setActiveSection("dashboard")}
             >
               <Icon name="grid" />
-              Dashboard
+              {t("overview")}
             </button>
 
             <button
@@ -462,7 +550,7 @@ function DoctorDashboard() {
               onClick={() => setActiveSection("patients")}
             >
               <Icon name="patients" />
-              Patient Lookup
+              {t("patient")}
             </button>
 
             <button
@@ -474,7 +562,7 @@ function DoctorDashboard() {
               onClick={() => setActiveSection("reports")}
             >
               <Icon name="ai" />
-              AI Reports
+              {t("reports")}
             </button>
 
           </nav>
@@ -497,7 +585,7 @@ function DoctorDashboard() {
             onClick={logout}
           >
             <Icon name="logout" size={17} />
-            Sign out
+            {t("logout")}
           </button>
 
         </div>
@@ -531,9 +619,7 @@ function DoctorDashboard() {
                 {doctor?.full_name || "Doctor"}
               </strong>
 
-              <span>
-                Physician
-              </span>
+              <span>Doctor-role account</span>
             </div>
 
           </div>
@@ -557,8 +643,12 @@ function DoctorDashboard() {
 
             <p>
               Search a patient using their unique Patient ID
-              to review submitted health information and
+              after they select your account for consultation to review submitted health information and
               generate AI-assisted reports.
+            </p>
+
+            <p>
+              Enter the Patient ID during an in-person visit to request access. The patient must approve your request in their own portal before records can be opened. This prototype does not verify medical licences.
             </p>
 
           </div>
@@ -601,7 +691,7 @@ function DoctorDashboard() {
               </span>
 
               <h2>
-                Find patient records
+                Find patient or request access
               </h2>
             </div>
 
@@ -639,13 +729,13 @@ function DoctorDashboard() {
 
               {searching
                 ? "Searching..."
-                : "Search patient"}
+                : "Find / request access"}
             </button>
 
           </div>
 
           <p className="search-hint">
-            Enter the unique Patient ID provided by the patient.
+            Enter the Patient ID provided by the patient. An ID alone never grants record access.
           </p>
 
         </section>
@@ -707,7 +797,7 @@ function DoctorDashboard() {
 
               <div className="patient-verified">
                 <Icon name="shield" size={14} />
-                Verified patient
+                Patient-authorised access
               </div>
 
             </div>
@@ -812,6 +902,45 @@ function DoctorDashboard() {
 
           </section>
 
+        )}
+
+
+        {patient && consultationRequest && activeSection !== "reports" && (
+          <section className="clinician-followup-panel">
+            <span>DOCTOR-ACCOUNT NOTES</span>
+            <p>Patient-approved access · {consultationRequest.decision_tier.replace("_", " ")} screening</p>
+            <p>
+              Write your own follow-up, checkup instruction, or report summary after examining the patient.
+              This prototype does not verify medical licences and these notes are not e-prescriptions.
+            </p>
+            <label>
+              Note type
+              <select value={noteType} onChange={(event) => setNoteType(event.target.value)}>
+                <option value="follow_up">Follow-up advice</option>
+                <option value="checkup">Next checkup</option>
+                <option value="report">Report summary</option>
+              </select>
+            </label>
+            <label>
+              Visit type
+              <select value={consultationMode} onChange={(event) => setConsultationMode(event.target.value)}>
+                <option value="in_person">In-person visit</option>
+                <option value="video">Video follow-up</option>
+                <option value="phone">Phone follow-up</option>
+              </select>
+            </label>
+            <textarea
+              value={followUpPlan}
+              onChange={(event) => setFollowUpPlan(event.target.value)}
+              placeholder="Your assessment and follow-up instructions..."
+              maxLength={4000}
+            />
+            <button className="save-report-button" type="button" onClick={saveClinicalFollowUp}
+              disabled={savingFollowUp || !followUpPlan.trim()}>
+              {savingFollowUp ? "Saving..." : "Send note to patient"}
+            </button>
+            <button type="button" onClick={() => updateConsultationStatus("completed")}>Complete visit and close record access</button>
+          </section>
         )}
 
 
@@ -1149,30 +1278,22 @@ function DoctorDashboard() {
             </div>
 
             {aiResult.heatmap_url && (
+              <GradCamViewer
+                originalUrl={aiResult.source_image_url}
+                heatmapUrl={aiResult.heatmap_url}
+                targetClass={aiResult.predicted_disease}
+                xaiNote={aiResult.xai?.gradcam_note}
+              />
+            )}
 
-              <div className="xai-panel">
+            <SeverityBadge
+              decisionSupport={aiResult.decision_support}
+              decisionTier={aiResult.decision_tier}
+              disclaimer={aiResult.disclaimer}
+            />
 
-                <div>
-                  <span>
-                    XAI HEATMAP
-                  </span>
-
-                  <strong>
-                    Visual explanation
-                  </strong>
-
-                  <p>
-                    {aiResult.xai?.gradcam_note}
-                  </p>
-                </div>
-
-                <img
-                  src={aiResult.heatmap_url}
-                  alt="AI explainability heatmap"
-                />
-
-              </div>
-
+            {aiResult.xai && aiResult.xai.method === "SHAP" && (
+              <ShapViewer xaiData={aiResult.xai} predictedDisease={aiResult.predicted_disease} />
             )}
 
             {aiResult.xai && (
@@ -1207,12 +1328,22 @@ function DoctorDashboard() {
 
             )}
 
+            {aiResult.model_type === "symptom_condition" && (
+              <p className="symptom-model-note">
+                The XGBoost model used the selected symptom terms shown above. Free-text notes are retained for clinician review but are not inferred as model symptoms.
+              </p>
+            )}
+
             {aiResult.top_predictions && (
 
               <div className="top-predictions">
 
                 <span>
-                  TOP PREDICTIONS
+                  {aiResult.model_type === "chest_xray_findings"
+                    ? "RANKED CHEST FINDINGS"
+                    : aiResult.model_type === "symptom_condition"
+                      ? "RANKED SYMPTOM-MODEL CONDITIONS"
+                    : "TOP PREDICTIONS"}
                 </span>
 
                 {aiResult.top_predictions.map((item) => (
@@ -1268,7 +1399,7 @@ function DoctorDashboard() {
 
         <footer className="doctor-footer">
           <span>
-            Clinical CDS · Physician Workspace
+            Clinical CDS · Doctor-role workspace
           </span>
 
           <span>

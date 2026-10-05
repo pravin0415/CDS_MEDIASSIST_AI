@@ -81,7 +81,7 @@ function ForgotPassword() {
 
         </form>
 
-        <Link to="/">
+        <Link to="/login">
           Back to login
         </Link>
 

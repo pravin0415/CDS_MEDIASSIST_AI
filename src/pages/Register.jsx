@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { supabase } from "../lib/supabase";
+import { useLanguage } from "../i18n";
 
 // Generate unique-looking patient ID
 const generatePatientId = () => {
@@ -20,17 +21,14 @@ const generatePatientId = () => {
 };
 
 function Register() {
+  const { t } = useLanguage();
   const navigate = useNavigate();
-
   const [role, setRole] = useState("patient");
 
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-
-  const [qualification, setQualification] = useState("");
-  const [licenseNumber, setLicenseNumber] = useState("");
 
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -64,11 +62,7 @@ function Register() {
       options: {
         data: {
           full_name: fullName,
-          role: role,
-          qualification:
-            role === "doctor" ? qualification : null,
-          license_number:
-            role === "doctor" ? licenseNumber : null,
+          role,
         },
       },
     });
@@ -87,32 +81,20 @@ function Register() {
       return;
     }
 
-    /*
-      Generate user code only for patients.
-
-      Patient:
-      user_code = PAT-XXXXXXXX
-
-      Doctor:
-      user_code = null
-    */
-    const userCode =
-      role === "patient"
-        ? generatePatientId()
-        : null;
+    const userCode = role === "patient" ? generatePatientId() : null;
 
     // Insert user profile
     const { error: profileError } = await supabase
       .from("profiles")
-      .insert({
+      .upsert({
         id: data.user.id,
         full_name: fullName,
-        role: role,
+        role,
         user_code: userCode,
-      },
-    {
-      onConflict: ["id"], // Avoid duplicate entries
-    });
+      }, {
+        onConflict: "id",
+        ignoreDuplicates: true,
+      });
 
     // Handle profile insertion error
     if (profileError) {
@@ -129,11 +111,7 @@ function Register() {
     */
 
     if (data.session) {
-      if (role === "doctor") {
-        navigate("/doctor");
-      } else {
-        navigate("/patient");
-      }
+      navigate(role === "doctor" ? "/doctor" : "/patient");
     } else {
       setMessage(
         "Registration successful. Please check your email to verify your account."
@@ -161,14 +139,17 @@ function Register() {
           <span>CREATE YOUR ACCOUNT</span>
           <h1>Join the Clinical CDS platform.</h1>
           <p>
-            Patients can submit medical information and doctors
-            can review AI-assisted reports from one workspace.
+            Patients can explore AI-assisted screening. Doctor-role accounts can request access
+            using a Patient ID during an in-person visit; the patient must approve that request.
+            This academic prototype does not verify medical licences.
           </p>
         </div>
 
       </section>
 
       <div className="auth-card">
+
+        <Link to="/" className="auth-home-link">← Back to home</Link>
 
         <div className="auth-card-heading">
           <span>NEW ACCOUNT</span>
@@ -190,69 +171,29 @@ function Register() {
         <form onSubmit={handleRegister}>
           <input
             type="text"
-            placeholder="Full Name"
+            placeholder={t("fullName")}
             value={fullName}
             onChange={(e) => setFullName(e.target.value)}
             required
           />
 
+          <div className="role-selection">
+            <label><input type="radio" value="patient" checked={role === "patient"} onChange={(e) => setRole(e.target.value)} /> {t("patient")}</label>
+            <label><input type="radio" value="doctor" checked={role === "doctor"} onChange={(e) => setRole(e.target.value)} /> {t("doctor")}</label>
+          </div>
+
           <input
             type="email"
-            placeholder="Email"
+            placeholder={t("email")}
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
           />
 
-          <div className="role-selection">
-            <label>
-              <input
-                type="radio"
-                value="patient"
-                checked={role === "patient"}
-                onChange={(e) => setRole(e.target.value)}
-              />
-              Patient
-            </label>
-
-            <label>
-              <input
-                type="radio"
-                value="doctor"
-                checked={role === "doctor"}
-                onChange={(e) => setRole(e.target.value)}
-              />
-              Doctor
-            </label>
-          </div>
-
-          {role === "doctor" && (
-            <>
-              <input
-                type="text"
-                placeholder="Qualification"
-                value={qualification}
-                onChange={(e) =>
-                  setQualification(e.target.value)
-                }
-                required
-              />
-
-              <input
-                type="text"
-                placeholder="Medical License Number"
-                value={licenseNumber}
-                onChange={(e) =>
-                  setLicenseNumber(e.target.value)
-                }
-                required
-              />
-            </>
-          )}
 
           <input
             type="password"
-            placeholder="Password"
+            placeholder={t("password")}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
@@ -260,7 +201,7 @@ function Register() {
 
           <input
             type="password"
-            placeholder="Confirm Password"
+            placeholder={t("password")}
             value={confirmPassword}
             onChange={(e) =>
               setConfirmPassword(e.target.value)
@@ -271,13 +212,13 @@ function Register() {
           <button type="submit" disabled={loading}>
             {loading
               ? "Creating Account..."
-              : "Register"}
+              : t("register")}
           </button>
         </form>
 
         <p>
           Already have an account?{" "}
-          <Link to="/">
+          <Link to="/login">
             Login
           </Link>
         </p>

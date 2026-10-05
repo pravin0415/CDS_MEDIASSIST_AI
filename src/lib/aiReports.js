@@ -47,7 +47,7 @@ export async function saveAiReport({
       report,
     })
     .select(REPORT_SELECT)
-    .single();
+    .maybeSingle();
 
   if (error) throw error;
 

@@ -1,4 +1,6 @@
 from pathlib import Path
+import json
+import zipfile
 
 import cv2
 import numpy as np
@@ -7,12 +9,60 @@ from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing import image
 
 from skin_class_names import class_names
+from decision_support_service import evaluate_decision_support
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 MODEL_PATH = ROOT_DIR / "models" / "skin_disease" / "skin_disease_model.keras"
+COMPAT_MODEL_PATH = ROOT_DIR / "backend" / "runtime" / "skin_disease_model_compatible_v2.keras"
 
-model = load_model(MODEL_PATH)
+
+def _remove_unsupported_config_fields(value):
+    """Remove newer-Keras metadata that does not affect learned weights."""
+    if isinstance(value, dict):
+        for field in (
+            "quantization_config",
+            "input_axes",
+            "output_axes",
+            "renorm",
+            "renorm_clipping",
+            "renorm_momentum",
+        ):
+            value.pop(field, None)
+        for nested_value in value.values():
+            _remove_unsupported_config_fields(nested_value)
+    elif isinstance(value, list):
+        for nested_value in value:
+            _remove_unsupported_config_fields(nested_value)
+
+
+def _get_compatible_model_path():
+    """Create a runtime-only Keras archive compatible with the installed Keras."""
+    COMPAT_MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if COMPAT_MODEL_PATH.exists() and (
+        COMPAT_MODEL_PATH.stat().st_mtime >= MODEL_PATH.stat().st_mtime
+    ):
+        return COMPAT_MODEL_PATH
+
+    with zipfile.ZipFile(MODEL_PATH, "r") as source:
+        config = json.loads(source.read("config.json"))
+        _remove_unsupported_config_fields(config)
+        temporary_path = COMPAT_MODEL_PATH.with_suffix(".tmp.keras")
+
+        with zipfile.ZipFile(temporary_path, "w", compression=zipfile.ZIP_STORED) as target:
+            for item in source.infolist():
+                contents = (
+                    json.dumps(config, separators=(",", ":")).encode("utf-8")
+                    if item.filename == "config.json"
+                    else source.read(item.filename)
+                )
+                target.writestr(item.filename, contents)
+
+    temporary_path.replace(COMPAT_MODEL_PATH)
+    return COMPAT_MODEL_PATH
+
+
+model = load_model(_get_compatible_model_path(), compile=False)
 
 
 def preprocess_image(image_path):
@@ -28,11 +78,17 @@ def analyze_skin_disease(image_path):
     class_index = int(np.argmax(prediction))
     confidence = float(prediction[class_index])
 
-    top_indices = np.argsort(prediction)[::-1][:3]
+    decision_support = evaluate_decision_support("skin", {
+        "predicted_disease": class_names[class_index],
+        "model_score": confidence,
+    })
+
+    top_indices = np.argsort(prediction)[::-1]
     top_predictions = [
         {
             "label": class_names[int(index)],
             "confidence": round(float(prediction[int(index)]), 4),
+            "model_score": round(float(prediction[int(index)]), 4),
         }
         for index in top_indices
     ]
@@ -42,6 +98,9 @@ def analyze_skin_disease(image_path):
         "predicted_disease": class_names[class_index],
         "prediction": class_names[class_index],
         "confidence": round(confidence, 4),
+        "model_score": round(confidence, 4),
+        "decision_tier": decision_support["decision_tier"],
+        "decision_support": decision_support,
         "top_predictions": top_predictions,
     }
 

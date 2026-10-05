@@ -1,0 +1,8 @@
+{
+  "dataset": "dataset.csv",
+  "training_rows": 4920,
+  "symptom_count": 131,
+  "disease_count": 41,
+  "development_validation_accuracy": 1.0,
+  "warning": "Development result from a curated symptom dataset. Not clinical validation or a diagnosis model."
+}

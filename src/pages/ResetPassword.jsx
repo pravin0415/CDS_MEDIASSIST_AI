@@ -51,7 +51,7 @@ function ResetPassword() {
       );
 
       setTimeout(() => {
-        navigate("/");
+        navigate("/login");
       }, 2000);
 
     }

@@ -128,6 +128,14 @@ a:hover {
   margin-bottom: 22px;
 }
 
+.auth-home-link {
+  display: inline-block;
+  margin-bottom: 18px;
+  color: #006d68;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .auth-card-heading h2 {
   margin: 7px 0 0;
   color: #101828;
@@ -256,3 +264,5 @@ a:hover {
     margin: 28px auto;
   }
 }
+ .language-selector { position: fixed; z-index: 1000; top: 14px; right: 16px; display: inline-flex; align-items: center; gap: 6px; padding: 6px 9px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #1e293b; font: 600 12px system-ui, sans-serif; box-shadow: 0 1px 4px rgba(15,23,42,.12); }
+ .language-selector select { border: 0; background: transparent; font: inherit; color: inherit; cursor: pointer; }

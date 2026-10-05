@@ -5,6 +5,7 @@ import {
 } from "react-router-dom";
 
 import Login from "./pages/Login";
+import LandingPage from "./pages/LandingPage";
 import Register from "./pages/Register";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
@@ -13,19 +14,29 @@ import PatientDashboard from "./pages/PatientDashboard";
 import DoctorDashboard from "./pages/DoctorDashboard";
 
 import ProtectedRoute from "./components/ProtectedRoute";
+import { LanguageSelector } from "./i18n";
 
 function App() {
 
   return (
     <BrowserRouter>
 
+      <LanguageSelector />
+
       <Routes>
 
         {/* Authentication */}
 
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/login" element={<Login />} />
+
         <Route
-          path="/"
-          element={<Login />}
+          path="/doctor"
+          element={
+            <ProtectedRoute requiredRole="doctor">
+              <DoctorDashboard />
+            </ProtectedRoute>
+          }
         />
 
         <Route
@@ -53,20 +64,6 @@ function App() {
               requiredRole="patient"
             >
               <PatientDashboard />
-            </ProtectedRoute>
-          }
-        />
-
-
-        {/* Doctor */}
-
-        <Route
-          path="/doctor"
-          element={
-            <ProtectedRoute
-              requiredRole="doctor"
-            >
-              <DoctorDashboard />
             </ProtectedRoute>
           }
         />

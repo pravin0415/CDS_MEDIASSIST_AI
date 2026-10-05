@@ -1537,6 +1537,16 @@
   line-height: 1.7;
 }
 
+.symptom-model-note {
+  margin: 18px 18px 0;
+  padding: 12px;
+  border-left: 3px solid #2563eb;
+  background: #eff6ff;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .top-predictions {
   display: grid;
   gap: 10px;
@@ -1567,6 +1577,38 @@
   justify-content: flex-end;
   margin-top: 18px;
 }
+
+.clinician-followup-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 22px;
+  padding: 20px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.clinician-followup-panel > span {
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .08em;
+}
+
+.clinician-followup-panel h3,
+.clinician-followup-panel p { margin: 0; }
+
+.clinician-followup-panel select,
+.clinician-followup-panel textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 10px;
+  font: inherit;
+}
+
+.clinician-followup-panel textarea { min-height: 120px; resize: vertical; }
 
 .save-report-button {
   display: inline-flex;
